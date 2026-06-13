@@ -1,0 +1,5 @@
+{
+  "name": "NEON RC Controller",
+  "description": "A futuristic PWA for controlling ESP32-based RC cars with real-time WebSocket telemetry.",
+  "requestFramePermissions": []
+}
