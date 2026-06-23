@@ -1,10 +1,12 @@
 /**
  * @file receiver.ino
- * @brief Final high-performance firmware matching the React Cockpit Web App
- * 
- * Hardware Layout:
- * - Pin 16: MG90S Steering Servo Signal Wire
- * - Pin 17: Bnineteenteam 20A Brushed ESC Signal Wire
+ * @brief ESP32 receiver firmware for the React dashboard WebSocket controls.
+ *
+ * Expected WebSocket payload from the dashboard:
+ *   { "throttle": <int -100..100>, "steering": <int -100..100> }
+ *
+ * This sketch creates an AP named "NeonRC_Car" and opens a WebSocket at "/ws".
+ * Steering is mapped to GPIO 12 using ESP32 Core 3.0 LEDC PWM.
  */
 
 #include <WiFi.h>
@@ -13,60 +15,52 @@
 #include <ArduinoJson.h>
 
 // --- HARDWARE PIN DEFINITIONS ---
-#define SERVO_PIN         16
+#define STEERING_PIN      12
 #define ESC_PIN           17
 
-// --- HIGH-RESOLUTION PWM SETUP ---
-#define PWM_FREQ          50       // Standard 50Hz RC frame rate
-#define TIMER_RES         16       // 16-bit precision (0 - 65535)
-#define SERVO_CH          0
-#define ESC_CH            1
+// --- PWM SETUP ---
+#define PWM_FREQ          50       // 50Hz standard RC frame rate
+#define PWM_RES           16       // 16-bit resolution
 
-// Network credentials matching your Setup UI specs
 const char* ssid = "NeonRC_Car";
-const char* password = "password123"; 
+const char* password = "password123";
 
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 unsigned long lastPacketTime = 0;
-const unsigned long FAILSAFE_TIMEOUT_MS = 500; // 0.5s connection protection drop
+const unsigned long FAILSAFE_TIMEOUT_MS = 500;
 
-// Converts microseconds directly to 16-bit register duty values
-void writeMicroseconds(uint8_t channel, uint32_t us) {
+void writeMicroseconds(uint8_t pin, uint32_t us) {
   uint32_t duty = (us * 65535) / 20000;
-  ledcWrite(channel, duty);
+  ledcWrite(pin, duty);
 }
 
-// Drops car states back to safe, non-destructive defaults
 void triggerFailsafe() {
-  writeMicroseconds(SERVO_CH, 1500); // Dead center
-  writeMicroseconds(ESC_CH, 1500);   // Stop motor
+  writeMicroseconds(STEERING_PIN, 1500);
+  writeMicroseconds(ESC_PIN, 1500);
 }
 
-// Maps input arrays (-100 to 100) straight to standard microsecond pulses
 void processMovement(int throttleValue, int steeringValue) {
-  lastPacketTime = millis(); // Kick the watchdog timer
+  lastPacketTime = millis();
 
   throttleValue = constrain(throttleValue, -100, 100);
   steeringValue = constrain(steeringValue, -100, 100);
 
-  // Map inputs directly to clean 1000us - 2000us waveforms
-  uint32_t servoUs = map(steeringValue, -100, 100, 1000, 2000);
-  uint32_t escUs   = map(throttleValue, -100, 100, 1000, 2000);
+  uint32_t steeringUs = map(steeringValue, -100, 100, 1000, 2000);
+  uint32_t escUs      = map(throttleValue, -100, 100, 1000, 2000);
 
-  writeMicroseconds(SERVO_CH, servoUs);
-  writeMicroseconds(ESC_CH, escUs);
+  writeMicroseconds(STEERING_PIN, steeringUs);
+  writeMicroseconds(ESC_PIN, escUs);
 }
 
-void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
-  AwsFrameInfo *info = (AwsFrameInfo*)arg;
+void handleWebSocketMessage(void* arg, uint8_t* data, size_t len) {
+  AwsFrameInfo* info = (AwsFrameInfo*)arg;
   if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
     data[len] = 0;
     StaticJsonDocument<256> doc;
     DeserializationError error = deserializeJson(doc, data, len);
     if (error) return;
 
-    // Direct loop echo back to keep latency analytics alive on screen
     if (doc.containsKey("ping")) {
       uint64_t timestamp = doc["ping"];
       String response = "{\"pong\":" + String(timestamp) + "}";
@@ -76,18 +70,20 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
     }
 
     if (doc.containsKey("throttle") && doc.containsKey("steering")) {
-      int t = doc["throttle"];
-      int s = doc["steering"];
-      processMovement(t, s);
+      int throttle = doc["throttle"];
+      int steering = doc["steering"];
+      processMovement(throttle, steering);
     }
   }
 }
 
-void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
-             void *arg, uint8_t *data, size_t len) {
+void onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type,
+             void* arg, uint8_t* data, size_t len) {
   switch (type) {
     case WS_EVT_CONNECT:
       lastPacketTime = millis();
+      Serial.print("WebSocket client connected: ");
+      Serial.println(client->remoteIP());
       break;
     case WS_EVT_DISCONNECT:
       triggerFailsafe();
@@ -103,30 +99,25 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
 void setup() {
   Serial.begin(115200);
 
-  // Attach precise hardware PWM timers
-  ledcSetup(SERVO_CH, PWM_FREQ, TIMER_RES);
-  ledcAttachPin(SERVO_PIN, SERVO_CH);
-  
-  ledcSetup(ESC_CH, PWM_FREQ, TIMER_RES);
-  ledcAttachPin(ESC_PIN, ESC_CH);
+  // Set the resolution argument to 16 to match your PWM_RES logic
+  ledcAttach(STEERING_PIN, PWM_FREQ, 16);
+  ledcAttach(ESC_PIN, PWM_FREQ, 16);
 
   triggerFailsafe();
 
   WiFi.softAP(ssid, password);
-  Serial.print("Local Network Live! SSID: ");
+  Serial.print("Access point started: ");
   Serial.println(ssid);
 
   ws.onEvent(onEvent);
   server.addHandler(&ws);
   server.begin();
-  
+
   lastPacketTime = millis();
 }
 
 void loop() {
   ws.cleanupClients();
-
-  // Watchdog verification structure
   if (millis() - lastPacketTime > FAILSAFE_TIMEOUT_MS) {
     triggerFailsafe();
   }
