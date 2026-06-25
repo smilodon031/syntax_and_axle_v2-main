@@ -20,7 +20,7 @@
 
 // --- PWM SETUP ---
 #define PWM_FREQ          50       // 50Hz standard RC frame rate
-#define PWM_RES           16       // 16-bit resolution
+#define PWM_RES           16       // 16-bit resolution (0 to 65535)
 
 const char* ssid = "NeonRC_Car";
 const char* password = "password123";
@@ -31,13 +31,14 @@ unsigned long lastPacketTime = 0;
 const unsigned long FAILSAFE_TIMEOUT_MS = 500;
 
 void writeMicroseconds(uint8_t pin, uint32_t us) {
+  // Duty cycle calculation based on a 16-bit (65535) timer resolution
   uint32_t duty = (us * 65535) / 20000;
   ledcWrite(pin, duty);
 }
 
 void triggerFailsafe() {
-  writeMicroseconds(STEERING_PIN, 1500);
-  writeMicroseconds(ESC_PIN, 1500);
+  writeMicroseconds(STEERING_PIN, 1500); // Center the steering
+  writeMicroseconds(ESC_PIN, 1500);      // Neutral throttle
 }
 
 void processMovement(int throttleValue, int steeringValue) {
@@ -82,10 +83,11 @@ void onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType 
   switch (type) {
     case WS_EVT_CONNECT:
       lastPacketTime = millis();
-      Serial.print("WebSocket client connected: ");
+      Serial.print("WebSocket client connected from IP: ");
       Serial.println(client->remoteIP());
       break;
     case WS_EVT_DISCONNECT:
+      Serial.println("WebSocket client disconnected");
       triggerFailsafe();
       break;
     case WS_EVT_DATA:
@@ -99,9 +101,9 @@ void onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType 
 void setup() {
   Serial.begin(115200);
 
-  // Set the resolution argument to 16 to match your PWM_RES logic
-  ledcAttach(STEERING_PIN, PWM_FREQ, 16);
-  ledcAttach(ESC_PIN, PWM_FREQ, 16);
+  // FIXED: Pin timers are now initialized with PWM_RES (16-bit) to match the math calculation
+  ledcAttach(STEERING_PIN, PWM_FREQ, PWM_RES);
+  ledcAttach(ESC_PIN, PWM_FREQ, PWM_RES);
 
   triggerFailsafe();
 
