@@ -31,14 +31,13 @@ unsigned long lastPacketTime = 0;
 const unsigned long FAILSAFE_TIMEOUT_MS = 500;
 
 void writeMicroseconds(uint8_t pin, uint32_t us) {
-  // Duty cycle calculation based on a 16-bit (65535) timer resolution
   uint32_t duty = (us * 65535) / 20000;
   ledcWrite(pin, duty);
 }
 
 void triggerFailsafe() {
-  writeMicroseconds(STEERING_PIN, 1500); // Center the steering
-  writeMicroseconds(ESC_PIN, 1500);      // Neutral throttle
+  writeMicroseconds(STEERING_PIN, 1500);
+  writeMicroseconds(ESC_PIN, 1500);
 }
 
 void processMovement(int throttleValue, int steeringValue) {
@@ -54,18 +53,17 @@ void processMovement(int throttleValue, int steeringValue) {
   writeMicroseconds(ESC_PIN, escUs);
 }
 
-void handleWebSocketMessage(void* arg, uint8_t* data, size_t len) {
+void handleWebSocketMessage(AsyncWebSocketClient* client, void* arg, uint8_t* data, size_t len) {
   AwsFrameInfo* info = (AwsFrameInfo*)arg;
   if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
-    data[len] = 0;
-    StaticJsonDocument<256> doc;
-    DeserializationError error = deserializeJson(doc, data, len);
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, (char*)data, len);
     if (error) return;
 
     if (doc.containsKey("ping")) {
       uint64_t timestamp = doc["ping"];
       String response = "{\"pong\":" + String(timestamp) + "}";
-      ws.textAll(response);
+      client->text(response);
       lastPacketTime = millis();
       return;
     }
@@ -91,7 +89,7 @@ void onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType 
       triggerFailsafe();
       break;
     case WS_EVT_DATA:
-      handleWebSocketMessage(arg, data, len);
+      handleWebSocketMessage(client, arg, data, len);
       break;
     default:
       break;
@@ -101,7 +99,6 @@ void onEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType 
 void setup() {
   Serial.begin(115200);
 
-  // FIXED: Pin timers are now initialized with PWM_RES (16-bit) to match the math calculation
   ledcAttach(STEERING_PIN, PWM_FREQ, PWM_RES);
   ledcAttach(ESC_PIN, PWM_FREQ, PWM_RES);
 
